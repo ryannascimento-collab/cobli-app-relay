@@ -10,16 +10,41 @@ celular (APK) --HTTPS--> este relay (Vercel) --> armazenamento na nuvem <--busca
 
 ## Estado
 
-**Esqueleto.** Só existe `GET /api/app/v1/saude`. A rota `POST /api/app/v1/capturas` e a ligação com o armazenamento ainda não foram implementadas: dependem da definição do funcionamento do app. O contrato proposto está em `specs/api-app-android.md` do repositório `cobli-operacoes`.
+Rotas:
+
+- `GET /api/app/v1/saude` — sem autenticação; `{"ok":true,"versao":1}`.
+- `POST /api/app/v1/capturas` — recebe o canhoto de NF-e do aplicativo (multipart: `id`, `numero_nf`, `data_recebimento` dd/mm/aaaa, `nome_recebedor`, `usuario`, `capturado_em`, `foto` JPEG até 4 MB). Autentica por `Authorization: Bearer <token do aparelho>` e é idempotente por `(aparelho, id)`. Respostas: 201 (novo), 200 (reenvio já salvo), 401, 413, 415, 422 (só `numero_nf`, `data_recebimento`, `id` ou `foto` inválidos), 429, 503. **A URL é exatamente `https://cobli-app-relay.vercel.app/api/app/v1/capturas`, sem barra no final** (com barra a Vercel responde 308, e o app trata como falha).
+
+O contrato completo e as decisões estão em `specs/api-app-android.md` do repositório `cobli-operacoes`. O relay não tem nenhuma rota de leitura: consultar e ver as fotos é feito no Cobli Operações.
+
+## Preparar o Supabase da nuvem
+
+No SQL Editor, rode em ordem: `supabase/01_estrutura.sql` e depois `supabase/02_canhotos.sql`. Ambos são idempotentes.
+
+## Cadastrar um aparelho
+
+```
+node scripts/novo-aparelho.mjs "Celular do João"
+```
+
+Imprime o token (mostrado uma única vez; vai no app daquele aparelho) e o SQL que guarda **só o hash** dele, além do SQL para revogar. Cole o SQL no SQL Editor. Um token por aparelho: nunca um token único no APK.
+
+## Testes
+
+```
+npm test
+```
+
+Cobre envio normal, reenvio duplicado, campos obrigatórios ausentes, foto inválida ou grande, token errado, limite de envios e falha do banco (com um banco falso em memória).
 
 ## Regras de segurança (valem para todo código novo aqui)
 
-- **Chave por aparelho** no cabeçalho `X-Device-Key`. Só o hash SHA-256 é guardado. Nunca uma chave única dentro do APK.
+- **Token por aparelho** no cabeçalho `Authorization: Bearer`. Só o hash SHA-256 é guardado. Nunca um token único dentro do APK.
 - **Sem rotas de leitura.** O app só envia; ninguém lista nem baixa fotos por esta API.
 - **Credencial mínima** no armazenamento: gravar capturas e consultar aparelhos.
 - **Nenhuma chave do Supabase da Produção** neste projeto. Só as do projeto Supabase da nuvem, e só na Vercel.
 - Limites por aparelho guardados no banco (funções da Vercel não guardam estado entre chamadas).
-- Nunca registrar em log a chave recebida, o conteúdo da foto ou dados pessoais.
+- Nunca registrar em log o token recebido, o conteúdo da foto nem os campos do canhoto. Não guardar CPF/RG (o app não os envia).
 - Segredos só em variáveis de ambiente da Vercel. `.env*` está no `.gitignore`.
 
 ## Rodar localmente
