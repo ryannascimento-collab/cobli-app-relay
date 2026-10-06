@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Segredos: nunca versionar. As chaves ficam nas variáveis de ambiente da Vercel.
+.env
+.env.*
+!.env.example
+
+.vercel/
+npm-debug.log*
