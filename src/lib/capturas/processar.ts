@@ -19,9 +19,12 @@ import {
   textoOpcional,
 } from "./validar";
 
+export type StatusDispositivo = "pendente" | "ativo" | "revogado";
+
 export interface Dispositivo {
   id: string;
   nome: string;
+  status: StatusDispositivo;
 }
 
 export interface NovaCaptura {
@@ -38,7 +41,7 @@ export interface NovaCaptura {
 }
 
 export interface Dependencias {
-  /** Dispositivo ATIVO (não revogado) cujo hash de token bate. */
+  /** Dispositivo (em qualquer estado) cujo hash de token bate; quem decide o que fazer é o chamador. */
   buscarDispositivo(hashToken: string): Promise<Dispositivo | null>;
   capturaExiste(dispositivoId: string, idApp: string): Promise<boolean>;
   registrarEnvio(dispositivoId: string, limiteMinuto: number, limiteDia: number): Promise<"ok" | "minuto" | "dia">;
@@ -49,11 +52,11 @@ export interface Dependencias {
   agora(): Date;
 }
 
-function json(corpo: unknown, status: number, extra?: Record<string, string>): Response {
+export function json(corpo: unknown, status: number, extra?: Record<string, string>): Response {
   return Response.json(corpo, { status, headers: extra });
 }
 
-function ipDe(req: Request): string | null {
+export function ipDe(req: Request): string | null {
   const encaminhado = req.headers.get("x-forwarded-for");
   return encaminhado ? encaminhado.split(",")[0].trim().slice(0, 64) : null;
 }
@@ -73,9 +76,13 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
       return json({ erro: "nao_autorizado" }, 401);
     }
     const dispositivo = await deps.buscarDispositivo(sha256Hex(token));
-    if (!dispositivo) {
-      await deps.registrarTentativaRecusada("token_invalido", ipDe(req), null);
+    if (!dispositivo || dispositivo.status === "revogado") {
+      await deps.registrarTentativaRecusada(dispositivo ? "token_revogado" : "token_invalido", ipDe(req), dispositivo?.id ?? null);
       return json({ erro: "nao_autorizado" }, 401);
+    }
+    // Registrado mas ainda não liberado: o app guarda a fila e tenta depois (não é erro de dado).
+    if (dispositivo.status === "pendente") {
+      return json({ erro: "aguardando_liberacao" }, 403);
     }
 
     // 3. Reenvio de algo já salvo: devolve 200 sem gastar cota nem reler o corpo.

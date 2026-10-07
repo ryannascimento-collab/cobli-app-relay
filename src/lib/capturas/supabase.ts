@@ -1,31 +1,111 @@
 // Liga `Dependencias` ao Supabase NA NUVEM (projeto do relay, não o da Produção).
 // Usa a chave de serviço, que só existe nas variáveis de ambiente da Vercel.
 
-import { createClient } from "@supabase/supabase-js";
-import type { Dependencias } from "./processar";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Dependencias, StatusDispositivo } from "./processar";
+import { gerarTokenAleatorio, type DependenciasRegistro } from "./registrar";
 
 const BUCKET = "capturas";
 /** Se já houve tantas recusas no último minuto, para de gravar novas (evita encher o banco num ataque). */
 const MAX_RECUSAS_REGISTRADAS_POR_MINUTO = 50;
 
-export function criarDependencias(): Dependencias {
+function criarCliente(): SupabaseClient {
   const url = process.env.SUPABASE_URL;
   const chave = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !chave) throw new Error("variaveis_ausentes");
+  return createClient(url, chave, { auth: { persistSession: false, autoRefreshToken: false } });
+}
 
-  const db = createClient(url, chave, { auth: { persistSession: false, autoRefreshToken: false } });
+/** Registra uma recusa para auditoria, sem nunca derrubar a resposta e sem encher o banco num ataque. */
+async function registrarRecusa(db: SupabaseClient, motivo: string, ip: string | null, dispositivoId: string | null) {
+  try {
+    const desde = new Date(Date.now() - 60_000).toISOString();
+    const { count } = await db
+      .from("app_tentativas_recusadas")
+      .select("id", { count: "exact", head: true })
+      .gte("ocorrido_em", desde);
+    if ((count ?? 0) >= MAX_RECUSAS_REGISTRADAS_POR_MINUTO) return;
+    await db.from("app_tentativas_recusadas").insert({ motivo, ip, dispositivo_id: dispositivoId });
+  } catch {
+    // O registro de auditoria nunca pode derrubar a resposta.
+  }
+}
+
+export function criarDependenciasRegistro(): DependenciasRegistro {
+  const db = criarCliente();
+  return {
+    async buscarChaveImplantacao(hash) {
+      const { data, error } = await db
+        .from("app_chaves_implantacao")
+        .select("id")
+        .eq("chave_hash", hash)
+        .eq("ativa", true)
+        .is("revogada_em", null)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? { id: data.id as string } : null;
+    },
+
+    async buscarPorInstalacao(idInstalacao) {
+      const { data, error } = await db
+        .from("app_dispositivos")
+        .select("id, status")
+        .eq("id_instalacao", idInstalacao)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? { id: data.id as string, status: data.status as StatusDispositivo } : null;
+    },
+
+    async contarNovosDoIpNaUltimaHora(ip) {
+      const desde = new Date(Date.now() - 3_600_000).toISOString();
+      const { count, error } = await db
+        .from("app_dispositivos")
+        .select("id", { count: "exact", head: true })
+        .eq("ip_registro", ip)
+        .gte("criado_em", desde);
+      if (error) throw error;
+      return count ?? 0;
+    },
+
+    async contarPendentes() {
+      const { count, error } = await db
+        .from("app_dispositivos")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pendente");
+      if (error) throw error;
+      return count ?? 0;
+    },
+
+    async criarDispositivo(d) {
+      const nome = d.nome ?? `Aparelho ${d.id_instalacao.slice(0, 8)}`;
+      const { error } = await db.from("app_dispositivos").insert({ ...d, nome, status: "pendente" });
+      if (error) throw error;
+    },
+
+    async reemitirTokenPendente(id, novoHash) {
+      const { error } = await db.from("app_dispositivos").update({ chave_hash: novoHash }).eq("id", id).eq("status", "pendente");
+      if (error) throw error;
+    },
+
+    registrarTentativaRecusada: (motivo, ip, dispositivoId) => registrarRecusa(db, motivo, ip, dispositivoId),
+    gerarToken: gerarTokenAleatorio,
+  };
+}
+
+export function criarDependencias(): Dependencias {
+  const db = criarCliente();
 
   return {
     async buscarDispositivo(hashToken) {
       const { data, error } = await db
         .from("app_dispositivos")
-        .select("id, nome")
+        .select("id, nome, status")
         .eq("chave_hash", hashToken)
-        .eq("ativo", true)
-        .is("revogado_em", null)
         .maybeSingle();
       if (error) throw error;
-      return data ? { id: data.id as string, nome: data.nome as string } : null;
+      return data
+        ? { id: data.id as string, nome: data.nome as string, status: data.status as StatusDispositivo }
+        : null;
     },
 
     async capturaExiste(dispositivoId, idApp) {
@@ -63,19 +143,7 @@ export function criarDependencias(): Dependencias {
       throw error;
     },
 
-    async registrarTentativaRecusada(motivo, ip, dispositivoId) {
-      try {
-        const desde = new Date(Date.now() - 60_000).toISOString();
-        const { count } = await db
-          .from("app_tentativas_recusadas")
-          .select("id", { count: "exact", head: true })
-          .gte("ocorrido_em", desde);
-        if ((count ?? 0) >= MAX_RECUSAS_REGISTRADAS_POR_MINUTO) return;
-        await db.from("app_tentativas_recusadas").insert({ motivo, ip, dispositivo_id: dispositivoId });
-      } catch {
-        // O registro de auditoria nunca pode derrubar a resposta.
-      }
-    },
+    registrarTentativaRecusada: (motivo, ip, dispositivoId) => registrarRecusa(db, motivo, ip, dispositivoId),
 
     async tocarUso(dispositivoId) {
       await db.from("app_dispositivos").update({ ultimo_uso_em: new Date().toISOString() }).eq("id", dispositivoId);

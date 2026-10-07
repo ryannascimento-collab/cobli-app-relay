@@ -13,21 +13,24 @@ celular (APK) --HTTPS--> este relay (Vercel) --> armazenamento na nuvem <--busca
 Rotas:
 
 - `GET /api/app/v1/saude` — sem autenticação; `{"ok":true,"versao":1}`.
+- `POST /api/app/v1/registrar` — o app se registra sozinho na primeira abertura (JSON `{ id_instalacao, nome?, modelo? }`, cabeçalho `X-Chave-Implantacao`). Devolve o token do aparelho uma única vez; o aparelho nasce **pendente** e só envia depois de **liberado por um admin**. Respostas: 201, 200 (reemissão enquanto pendente), 401, 409, 422, 429, 503.
+- `GET /api/app/v1/status` — com o token do aparelho; devolve `{ "status": "pendente" | "ativo" | "revogado" }`.
 - `POST /api/app/v1/capturas` — recebe o canhoto de NF-e do aplicativo (multipart: `id`, `numero_nf`, `data_recebimento` dd/mm/aaaa, `nome_recebedor`, `usuario`, `capturado_em`, `foto` JPEG até 4 MB). Autentica por `Authorization: Bearer <token do aparelho>` e é idempotente por `(aparelho, id)`. Respostas: 201 (novo), 200 (reenvio já salvo), 401, 413, 415, 422 (só `numero_nf`, `data_recebimento`, `id` ou `foto` inválidos), 429, 503. **A URL é exatamente `https://cobli-app-relay.vercel.app/api/app/v1/capturas`, sem barra no final** (com barra a Vercel responde 308, e o app trata como falha).
 
 O contrato completo e as decisões estão em `specs/api-app-android.md` do repositório `cobli-operacoes`. O relay não tem nenhuma rota de leitura: consultar e ver as fotos é feito no Cobli Operações.
 
 ## Preparar o Supabase da nuvem
 
-No SQL Editor, rode em ordem: `supabase/01_estrutura.sql` e depois `supabase/02_canhotos.sql`. Ambos são idempotentes.
+No SQL Editor, rode em ordem: `supabase/01_estrutura.sql`, `02_canhotos.sql` e `03_registro_automatico.sql`. Todos são idempotentes.
 
-## Cadastrar um aparelho
+## Registro e liberação de aparelhos
 
-```
-node scripts/novo-aparelho.mjs "Celular do João"
-```
+1. **Chave de implantação** (vai dentro do APK; só impede que robôs lotem o cadastro, e é revogável): `node scripts/nova-chave-implantacao.mjs "APK transportadora 1"` imprime a chave (uma vez) e o SQL com o hash.
+2. O app se registra sozinho (`/registrar`) e o aparelho fica **pendente**.
+3. Um **admin libera** o aparelho: pela tela do Cobli Operações (planejada) ou, até lá, por SQL: `select id, nome, modelo, criado_em, ip_registro from public.app_dispositivos where status = 'pendente' order by criado_em;` e depois `update public.app_dispositivos set status = 'ativo', liberado_em = now() where id = '<id>';`. Revogar: `update public.app_dispositivos set status = 'revogado', revogado_em = now() where id = '<id>';`.
+4. Para um aparelho de teste já liberado, sem passar pelo registro: `node scripts/novo-aparelho.mjs "Celular de teste"`.
 
-Imprime o token (mostrado uma única vez; vai no app daquele aparelho) e o SQL que guarda **só o hash** dele, além do SQL para revogar. Cole o SQL no SQL Editor. Um token por aparelho: nunca um token único no APK.
+Um token por aparelho: nunca um token único no APK.
 
 ## Testes
 

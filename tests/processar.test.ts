@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { processarCaptura, type Dependencias, type NovaCaptura } from "../src/lib/capturas/processar";
+import { processarCaptura, type Dependencias, type NovaCaptura, type StatusDispositivo } from "../src/lib/capturas/processar";
 import { sha256Hex } from "../src/lib/capturas/validar";
 
 const TOKEN = "token-de-teste";
@@ -8,7 +8,7 @@ const DISPOSITIVO = { id: "11111111-1111-1111-1111-111111111111", nome: "Celular
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 
 /** Banco falso em memória. */
-function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean } = {}) {
+function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean; status?: StatusDispositivo } = {}) {
   const capturas: NovaCaptura[] = [];
   const fotos = new Map<string, Uint8Array>();
   const recusas: string[] = [];
@@ -16,7 +16,7 @@ function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean 
   const deps: Dependencias = {
     async buscarDispositivo(hash) {
       if (opcoes.falhar) throw new Error("banco fora do ar");
-      return hash === sha256Hex(TOKEN) ? DISPOSITIVO : null;
+      return hash === sha256Hex(TOKEN) ? { ...DISPOSITIVO, status: opcoes.status ?? "ativo" } : null;
     },
     async capturaExiste(dispositivoId, idApp) {
       return capturas.some((c) => c.dispositivo_id === dispositivoId && c.id_app === idApp);
@@ -188,4 +188,23 @@ test("a resposta e os registros nunca trazem o token", async () => {
   const r = await processarCaptura(montarRequisicao(), f.deps);
   assert.equal((await r.text()).includes(TOKEN), false);
   assert.equal(JSON.stringify(f.capturas).includes(TOKEN), false);
+});
+
+test("aparelho pendente: 403 aguardando_liberacao, sem gravar e sem gastar cota", async () => {
+  const f = criarFalsos({ status: "pendente" });
+  const r = await processarCaptura(montarRequisicao(), f.deps);
+  assert.equal(r.status, 403);
+  assert.deepEqual(await r.json(), { erro: "aguardando_liberacao" });
+  assert.equal(f.capturas.length, 0);
+  assert.equal(f.fotos.size, 0);
+  assert.equal(f.envios(), 0);
+});
+
+test("aparelho revogado: 401 igual ao token inválido, e a recusa é registrada", async () => {
+  const f = criarFalsos({ status: "revogado" });
+  const r = await processarCaptura(montarRequisicao(), f.deps);
+  assert.equal(r.status, 401);
+  assert.deepEqual(await r.json(), { erro: "nao_autorizado" });
+  assert.deepEqual(f.recusas, ["token_revogado"]);
+  assert.equal(f.capturas.length, 0);
 });
