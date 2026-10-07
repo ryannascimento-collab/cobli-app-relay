@@ -8,7 +8,7 @@ const DISPOSITIVO = { id: "11111111-1111-1111-1111-111111111111", nome: "Celular
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 
 /** Banco falso em memória. */
-function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean; status?: StatusDispositivo } = {}) {
+function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean; status?: StatusDispositivo; fila?: number } = {}) {
   const capturas: NovaCaptura[] = [];
   const fotos = new Map<string, Uint8Array>();
   const recusas: string[] = [];
@@ -20,6 +20,9 @@ function criarFalsos(opcoes: { cota?: "ok" | "minuto" | "dia"; falhar?: boolean;
     },
     async capturaExiste(dispositivoId, idApp) {
       return capturas.some((c) => c.dispositivo_id === dispositivoId && c.id_app === idApp);
+    },
+    async contarPendentes() {
+      return (opcoes.fila ?? 0) + capturas.length;
     },
     async registrarEnvio() {
       envios++;
@@ -207,4 +210,25 @@ test("aparelho revogado: 401 igual ao token inválido, e a recusa é registrada"
   assert.deepEqual(await r.json(), { erro: "nao_autorizado" });
   assert.deepEqual(f.recusas, ["token_revogado"]);
   assert.equal(f.capturas.length, 0);
+});
+
+test("fila cheia na nuvem (servidor não está buscando): 503 fila_cheia com Retry-After, sem gravar nem gastar cota", async () => {
+  const f = criarFalsos({ fila: 800 });
+  const r = await processarCaptura(montarRequisicao(), f.deps);
+  assert.equal(r.status, 503);
+  assert.deepEqual(await r.json(), { erro: "fila_cheia" });
+  assert.equal(r.headers.get("retry-after"), "600");
+  assert.equal(f.capturas.length, 0);
+  assert.equal(f.fotos.size, 0);
+  assert.equal(f.envios(), 0);
+  assert.deepEqual(f.recusas, ["fila_cheia"]);
+});
+
+test("fila cheia NÃO impede responder 200 a um reenvio já salvo", async () => {
+  const f = criarFalsos();
+  assert.equal((await processarCaptura(montarRequisicao(), f.deps)).status, 201);
+  const cheia = criarFalsos({ fila: 800 });
+  cheia.capturas.push(...f.capturas);
+  const r = await processarCaptura(montarRequisicao(), cheia.deps);
+  assert.equal(r.status, 200);
 });

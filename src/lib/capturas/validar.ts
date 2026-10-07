@@ -9,6 +9,9 @@ export const LIMITE_FOTO_BYTES = 4 * 1024 * 1024;
 /** Teto do corpo inteiro (foto + campos), conferido pelo Content-Length antes de ler. */
 export const LIMITE_CORPO_BYTES = LIMITE_FOTO_BYTES + 256 * 1024;
 
+/** Teto de capturas esperando na nuvem pra o servidor buscar. Protege o armazenamento do Supabase da nuvem se a busca parar: acima disso o relay responde 503 e o app tenta de novo depois. */
+export const LIMITE_FILA_PENDENTE = 800;
+
 export const LIMITE_ENVIOS_POR_MINUTO = 60;
 export const LIMITE_ENVIOS_POR_DIA = 2000;
 

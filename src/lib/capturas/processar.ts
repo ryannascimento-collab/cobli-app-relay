@@ -8,6 +8,7 @@ import {
   LIMITE_CORPO_BYTES,
   LIMITE_ENVIOS_POR_DIA,
   LIMITE_ENVIOS_POR_MINUTO,
+  LIMITE_FILA_PENDENTE,
   LIMITE_FOTO_BYTES,
   converterCapturadoEm,
   converterDataRecebimento,
@@ -44,6 +45,8 @@ export interface Dependencias {
   /** Dispositivo (em qualquer estado) cujo hash de token bate; quem decide o que fazer é o chamador. */
   buscarDispositivo(hashToken: string): Promise<Dispositivo | null>;
   capturaExiste(dispositivoId: string, idApp: string): Promise<boolean>;
+  /** Quantas capturas estão esperando na nuvem (ainda não buscadas pelo servidor). */
+  contarPendentes(): Promise<number>;
   registrarEnvio(dispositivoId: string, limiteMinuto: number, limiteDia: number): Promise<"ok" | "minuto" | "dia">;
   gravarFoto(caminho: string, bytes: Uint8Array): Promise<void>;
   inserirCaptura(captura: NovaCaptura): Promise<"criada" | "duplicada">;
@@ -90,6 +93,13 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
     if (idDoCabecalho && (await deps.capturaExiste(dispositivo.id, idDoCabecalho))) {
       await deps.tocarUso(dispositivo.id).catch(() => undefined);
       return json({ id: idDoCabecalho, status: "recebido" }, 200);
+    }
+
+    // 3b. Fila cheia (o servidor não está buscando): recusa por enquanto pra não estourar o armazenamento
+    //     da nuvem. É espera, não erro de dado: o app guarda e reenvia.
+    if ((await deps.contarPendentes()) >= LIMITE_FILA_PENDENTE) {
+      await deps.registrarTentativaRecusada("fila_cheia", ipDe(req), dispositivo.id);
+      return json({ erro: "fila_cheia" }, 503, { "Retry-After": "600" });
     }
 
     // 4. Limite por aparelho (cada tentativa conta, inclusive as inválidas).

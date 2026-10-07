@@ -118,6 +118,15 @@ export function criarDependencias(): Dependencias {
       return (count ?? 0) > 0;
     },
 
+    async contarPendentes() {
+      const { count, error } = await db
+        .from("capturas_app")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pendente");
+      if (error) throw error;
+      return count ?? 0;
+    },
+
     async registrarEnvio(dispositivoId, limiteMinuto, limiteDia) {
       const { data, error } = await db.rpc("app_registrar_envio", {
         p_dispositivo: dispositivoId,
