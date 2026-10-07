@@ -17,11 +17,13 @@ Rotas:
 - `GET /api/app/v1/status` — com o token do aparelho; devolve `{ "status": "pendente" | "ativo" | "revogado" }`.
 - `POST /api/app/v1/capturas` — recebe o canhoto de NF-e do aplicativo (multipart: `id`, `numero_nf`, `data_recebimento` dd/mm/aaaa, `nome_recebedor`, `usuario`, `capturado_em`, `foto` JPEG até 4 MB). Autentica por `Authorization: Bearer <token do aparelho>` e é idempotente por `(aparelho, id)`. Respostas: 201 (novo), 200 (reenvio já salvo), 401, 413, 415, 422 (só `numero_nf`, `data_recebimento`, `id` ou `foto` inválidos), 429, 503. **A URL é exatamente `https://cobli-app-relay.vercel.app/api/app/v1/capturas`, sem barra no final** (com barra a Vercel responde 308, e o app trata como falha).
 
+O `id` que vale é o do **corpo** (o `Idempotency-Key` é só reserva); `capturado_em` no futuro vira o horário do recebimento e precisa vir com fuso (`Z`). Migrações do Supabase da nuvem: `01`, `02`, `03` e `04_ajustes.sql` (índice; rodar depois da 03).
+
 O contrato completo e as decisões estão em `specs/api-app-android.md` do repositório `cobli-operacoes`. O relay não tem nenhuma rota de leitura: consultar e ver as fotos é feito no Cobli Operações.
 
 ## Preparar o Supabase da nuvem
 
-No SQL Editor, rode em ordem: `supabase/01_estrutura.sql`, `02_canhotos.sql` e `03_registro_automatico.sql`. Todos são idempotentes.
+No SQL Editor, rode em ordem: `supabase/01_estrutura.sql`, `02_canhotos.sql`, `03_registro_automatico.sql` e `04_ajustes.sql`. Todos são idempotentes.
 
 ## Registro e liberação de aparelhos
 

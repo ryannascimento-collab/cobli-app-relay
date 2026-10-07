@@ -170,3 +170,10 @@ test("status: o dono do token vê o próprio estado; token desconhecido é 401",
   const sem = await processarStatus(new Request("https://exemplo.test/s"), deps);
   assert.equal(sem.status, 401);
 });
+
+test("sem IP legível o aparelho é gravado com ip_registro \"desconhecido\" (assim o limite por IP também o conta)", async () => {
+  const f = criarFalsos();
+  const r = await processarRegistro(requisicao({ id_instalacao: INSTALACAO }), f.deps);
+  assert.equal(r.status, 201);
+  assert.equal(f.aparelhos[0].ip_registro, "desconhecido");
+});

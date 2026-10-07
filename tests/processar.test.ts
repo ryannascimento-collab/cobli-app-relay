@@ -232,3 +232,41 @@ test("fila cheia NÃO impede responder 200 a um reenvio já salvo", async () => 
   const r = await processarCaptura(montarRequisicao(), cheia.deps);
   assert.equal(r.status, 200);
 });
+
+test("Idempotency-Key igual ao de uma captura JÁ salva, mas com OUTRO id no corpo: a captura nova é gravada (nada é descartado em silêncio)", async () => {
+  const f = criarFalsos();
+  assert.equal((await processarCaptura(montarRequisicao(), f.deps)).status, 201); // id 1791322637072
+  const r = await processarCaptura(
+    montarRequisicao({ idempotencyKey: "1791322637072", campos: { id: "1791322999999" } }),
+    f.deps,
+  );
+  assert.equal(r.status, 201);
+  assert.deepEqual(await r.json(), { id: "1791322999999", status: "recebido" });
+  assert.equal(f.capturas.length, 2);
+});
+
+test("sem id no corpo, o Idempotency-Key vale como reserva", async () => {
+  const f = criarFalsos();
+  const r = await processarCaptura(montarRequisicao({ campos: { id: null }, idempotencyKey: "555" }), f.deps);
+  assert.equal(r.status, 201);
+  assert.equal(f.capturas[0].id_app, "555");
+});
+
+test("capturado_em no futuro (relógio do celular errado) vira o horário do recebimento; no passado é mantido", async () => {
+  const f = criarFalsos();
+  await processarCaptura(montarRequisicao({ campos: { id: "1", capturado_em: "2031-01-01T00:00:00Z" } }), f.deps);
+  assert.equal(f.capturas[0].capturado_em, "2026-10-06T12:00:00.000Z");
+  await processarCaptura(montarRequisicao({ campos: { id: "2", capturado_em: "2026-09-01T08:00:00Z" } }), f.deps);
+  assert.equal(f.capturas[1].capturado_em, "2026-09-01T08:00:00.000Z");
+});
+
+test("content-type que não é multipart: 415 sem gastar cota", async () => {
+  const f = criarFalsos();
+  const req = new Request("https://exemplo.test/x", {
+    method: "POST",
+    body: "{}",
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+  });
+  assert.equal((await processarCaptura(req, f.deps)).status, 415);
+  assert.equal(f.envios(), 0);
+});

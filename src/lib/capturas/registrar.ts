@@ -46,7 +46,8 @@ export async function processarRegistro(req: Request, deps: DependenciasRegistro
     if (Number.isFinite(declarado) && declarado > LIMITE_CORPO_REGISTRO_BYTES) {
       return json({ erro: "corpo_grande_demais" }, 413);
     }
-    const ip = ipDe(req);
+    // Sem IP legível, usa um valor fixo (e o grava assim): senão o limite por IP nunca contaria esses registros.
+    const ip = ipDe(req) ?? "desconhecido";
 
     // 1. Chave de implantação (cabeçalho X-Chave-Implantacao). Mesma resposta para ausente e inválida.
     const chave = req.headers.get("x-chave-implantacao")?.trim();
@@ -85,7 +86,7 @@ export async function processarRegistro(req: Request, deps: DependenciasRegistro
     }
 
     // 4. Aparelho novo: limites para um robô não lotar o cadastro.
-    if ((await deps.contarNovosDoIpNaUltimaHora(ip ?? "desconhecido")) >= LIMITE_REGISTROS_NOVOS_POR_IP_HORA) {
+    if ((await deps.contarNovosDoIpNaUltimaHora(ip)) >= LIMITE_REGISTROS_NOVOS_POR_IP_HORA) {
       await deps.registrarTentativaRecusada("limite_registros_ip", ip, null);
       return json({ erro: "muitos_registros" }, 429, { "Retry-After": "3600" });
     }

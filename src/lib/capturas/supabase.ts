@@ -26,6 +26,11 @@ async function registrarRecusa(db: SupabaseClient, motivo: string, ip: string | 
       .gte("ocorrido_em", desde);
     if ((count ?? 0) >= MAX_RECUSAS_REGISTRADAS_POR_MINUTO) return;
     await db.from("app_tentativas_recusadas").insert({ motivo, ip, dispositivo_id: dispositivoId });
+    // De vez em quando (2% das recusas) apaga as de mais de 30 dias: a tabela não cresce pra sempre.
+    if (Math.random() < 0.02) {
+      const corte = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      await db.from("app_tentativas_recusadas").delete().lt("ocorrido_em", corte);
+    }
   } catch {
     // O registro de auditoria nunca pode derrubar a resposta.
   }

@@ -54,11 +54,17 @@ export function textoOpcional(valor: unknown, max: number): string | null {
   return texto.slice(0, max);
 }
 
-/** capturado_em em ISO 8601; se faltar ou for inválido, usa o momento do recebimento (nunca causa erro). */
+/**
+ * capturado_em em ISO 8601. Se faltar, for inválido ou estiver no FUTURO (relógio do celular errado: ela
+ * ficaria no topo da lista pra sempre), usa o momento do recebimento. Nunca causa erro. Datas no passado
+ * são aceitas (a fila do app pode ficar dias sem internet). O horário precisa vir com fuso ("Z" ou
+ * "+00:00"): sem fuso o JavaScript lê como horário do servidor.
+ */
 export function converterCapturadoEm(valor: unknown, agora: Date): string {
   if (typeof valor === "string" && valor.trim().length > 0) {
     const d = new Date(valor.trim());
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
+    const ok = !Number.isNaN(d.getTime()) && d.getUTCFullYear() >= 2000 && d.getTime() <= agora.getTime() + 24 * 3600 * 1000;
+    if (ok) return d.toISOString();
   }
   return agora.toISOString();
 }

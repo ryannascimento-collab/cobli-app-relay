@@ -88,28 +88,10 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
       return json({ erro: "aguardando_liberacao" }, 403);
     }
 
-    // 3. Reenvio de algo já salvo: devolve 200 sem gastar cota nem reler o corpo.
-    const idDoCabecalho = normalizarIdApp(req.headers.get("idempotency-key"));
-    if (idDoCabecalho && (await deps.capturaExiste(dispositivo.id, idDoCabecalho))) {
-      await deps.tocarUso(dispositivo.id).catch(() => undefined);
-      return json({ id: idDoCabecalho, status: "recebido" }, 200);
-    }
-
-    // 3b. Fila cheia (o servidor não está buscando): recusa por enquanto pra não estourar o armazenamento
-    //     da nuvem. É espera, não erro de dado: o app guarda e reenvia.
-    if ((await deps.contarPendentes()) >= LIMITE_FILA_PENDENTE) {
-      await deps.registrarTentativaRecusada("fila_cheia", ipDe(req), dispositivo.id);
-      return json({ erro: "fila_cheia" }, 503, { "Retry-After": "600" });
-    }
-
-    // 4. Limite por aparelho (cada tentativa conta, inclusive as inválidas).
-    const cota = await deps.registrarEnvio(dispositivo.id, LIMITE_ENVIOS_POR_MINUTO, LIMITE_ENVIOS_POR_DIA);
-    if (cota !== "ok") {
-      await deps.registrarTentativaRecusada(`limite_${cota}`, ipDe(req), dispositivo.id);
-      return json({ erro: "muitos_envios" }, 429, { "Retry-After": cota === "minuto" ? "60" : "3600" });
-    }
-
-    // 5. Corpo multipart.
+    // 3. Corpo multipart. É lido ANTES de reconhecer um reenvio: o id que vale é o do CORPO, não o do
+    //    cabeçalho Idempotency-Key. Antes, um cabeçalho igual ao de uma captura já salva (bug do app)
+    //    fazia uma captura NOVA ser descartada com "200 recebido", sem aviso. O cabeçalho só serve de
+    //    reserva quando o corpo não traz um id válido.
     const tipo = req.headers.get("content-type") ?? "";
     if (!tipo.toLowerCase().startsWith("multipart/form-data")) {
       return json({ erro: "esperado_multipart" }, 415);
@@ -120,9 +102,29 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
     } catch {
       return json({ erro: "corpo_invalido" }, 400);
     }
+    const idApp = normalizarIdApp(form.get("id")) ?? normalizarIdApp(req.headers.get("idempotency-key"));
 
-    // 6. Validação. Só numero_nf, data_recebimento, id e foto podem recusar o envio.
-    const idApp = normalizarIdApp(form.get("id")) ?? idDoCabecalho;
+    // 4. Reenvio de algo já salvo: devolve 200 sem gastar cota (e sem exigir os demais campos).
+    if (idApp && (await deps.capturaExiste(dispositivo.id, idApp))) {
+      await deps.tocarUso(dispositivo.id).catch(() => undefined);
+      return json({ id: idApp, status: "recebido" }, 200);
+    }
+
+    // 5. Fila cheia (o servidor não está buscando): recusa por enquanto pra não estourar o armazenamento
+    //    da nuvem. É espera, não erro de dado: o app guarda e reenvia.
+    if ((await deps.contarPendentes()) >= LIMITE_FILA_PENDENTE) {
+      await deps.registrarTentativaRecusada("fila_cheia", ipDe(req), dispositivo.id);
+      return json({ erro: "fila_cheia" }, 503, { "Retry-After": "600" });
+    }
+
+    // 6. Limite por aparelho (cada tentativa conta, inclusive as inválidas).
+    const cota = await deps.registrarEnvio(dispositivo.id, LIMITE_ENVIOS_POR_MINUTO, LIMITE_ENVIOS_POR_DIA);
+    if (cota !== "ok") {
+      await deps.registrarTentativaRecusada(`limite_${cota}`, ipDe(req), dispositivo.id);
+      return json({ erro: "muitos_envios" }, 429, { "Retry-After": cota === "minuto" ? "60" : "3600" });
+    }
+
+    // 7. Validação. Só numero_nf, data_recebimento, id e foto podem recusar o envio.
     const numeroNf = normalizarNumeroNf(form.get("numero_nf"));
     const dataRecebimento = converterDataRecebimento(form.get("data_recebimento"));
     const campos: { campo: string; mensagem: string }[] = [];
@@ -131,12 +133,6 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
     if (!dataRecebimento) campos.push({ campo: "data_recebimento", mensagem: "obrigatória, formato dd/mm/aaaa e data real" });
     if (campos.length > 0 || !idApp || !numeroNf || !dataRecebimento) {
       return json({ erro: "dados_invalidos", campos }, 422);
-    }
-
-    // Reenvio cujo id só veio no corpo (sem o cabeçalho): ainda é idempotente.
-    if (idApp !== idDoCabecalho && (await deps.capturaExiste(dispositivo.id, idApp))) {
-      await deps.tocarUso(dispositivo.id).catch(() => undefined);
-      return json({ id: idApp, status: "recebido" }, 200);
     }
 
     const foto = form.get("foto");
@@ -151,7 +147,7 @@ export async function processarCaptura(req: Request, deps: Dependencias): Promis
       return json({ erro: "foto_nao_e_jpeg" }, 415);
     }
 
-    // 7. Gravação: foto primeiro (sobrescrever é seguro num reenvio), depois a linha.
+    // 8. Gravação: foto primeiro (sobrescrever é seguro num reenvio), depois a linha.
     const caminho = `${dispositivo.id}/${idApp}.jpg`;
     await deps.gravarFoto(caminho, bytes);
     const resultado = await deps.inserirCaptura({
